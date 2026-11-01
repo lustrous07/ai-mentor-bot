@@ -34,6 +34,7 @@ logger = logging.getLogger("MentorBot")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 TASKS_FILE = os.path.join(SCRIPT_DIR, "tasks.json")
+RULES_FILE = os.path.join(SCRIPT_DIR, "rules.json")
 
 # ----------------- Configuration & Storage ----------------- #
 
@@ -89,6 +90,19 @@ def load_tasks() -> List[dict]:
 def save_tasks(tasks: List[dict]):
     with open(TASKS_FILE, "w", encoding="utf-8") as f:
         json.dump(tasks, f, indent=2)
+
+def load_rules() -> List[dict]:
+    if not os.path.exists(RULES_FILE):
+        return []
+    try:
+        with open(RULES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_rules(rules: List[dict]):
+    with open(RULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(rules, f, indent=2)
 
 # Global in-memory conversation history: {user_id: [ {"role": "user"|"model", "text": "..."} ]}
 conversation_histories: Dict[int, List[dict]] = {}
@@ -249,6 +263,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>/homework &lt;text&gt;</code> — Log college homework or assignment\n"
         "• <code>/tasks</code> or <code>/todo</code> — View your pending assignments\n"
         "• <code>/done &lt;id&gt;</code> — Mark an assignment completed\n"
+        "• <code>/rule &lt;text&gt;</code> — Lock in a personal life rule\n"
+        "• <code>/rules</code> — View all your locked-in rules\n"
+        "• <code>/delrule &lt;id&gt;</code> — Delete a rule\n"
         "• <code>/schedule</code> — View your master timetable\n"
         "• <code>/habits</code> — View your 10/10 discipline protocol\n"
         "• <code>/clear</code> — Reset conversation context\n\n"
@@ -442,6 +459,72 @@ async def done_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
         )
 
+async def add_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/rule &lt;your personal rule&gt;</code>\n"
+            "<i>Example:</i> <code>/rule Never touch phone in bed after 10:30 PM</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    text = " ".join(context.args)
+    rules = load_rules()
+    rule_id = len(rules) + 1
+    new_rule = {
+        "id": rule_id,
+        "text": text,
+        "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
+    }
+    rules.append(new_rule)
+    save_rules(rules)
+
+    msg = (
+        f"<b>📜 PERSONAL RULE #{rule_id} LOCKED!</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚖️ <b>Rule:</b> <code>{html.escape(text)}</code>\n\n"
+        "🔥 <i>This rule is now permanently etched into my mentor memory. I will hold you ruthlessly accountable to it!</i>"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+async def list_rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rules = load_rules()
+    if not rules:
+        await update.message.reply_text(
+            "<b>📜 No custom rules set yet.</b>\n"
+            "Create an unbreakable rule by typing: <code>/rule &lt;your rule&gt;</code>\n"
+            "<i>Example:</i> <code>/rule 30 push-ups before breakfast daily</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    msg = "<b>📜 YOUR IRON PERSONAL RULES:</b>\n━━━━━━━━━━━━━━━━━━━━━\n"
+    for r in rules:
+        msg += f"• <b>Rule #{r['id']}</b>: {html.escape(r['text'])}\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━━━━\nTo delete a rule: <code>/delrule &lt;id&gt;</code>"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+async def del_rule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/delrule &lt;rule_id&gt;</code>\n<i>Example:</i> <code>/delrule 1</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    rule_id = int(context.args[0])
+    rules = load_rules()
+    new_rules = [r for r in rules if r["id"] != rule_id]
+
+    if len(new_rules) < len(rules):
+        save_rules(new_rules)
+        await update.message.reply_text(
+            f"🗑️ <b>Rule #{rule_id} Removed.</b> Stay disciplined with your remaining standards!",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.message.reply_text(f"⚠️ Rule #{rule_id} not found.", parse_mode=ParseMode.HTML)
+
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conversation_histories[user_id] = []
@@ -493,7 +576,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"If the student is texting during sleep hours (10:30 PM - 06:00 AM), address it firmly and push them to sleep."
     )
 
-    full_system_instruction = f"{SYSTEM_INSTRUCTION}\n\n{time_context}\n\n[Active Student Context]\n{pending_summary}"
+    # User's Custom Iron Rules Context
+    rules = load_rules()
+    rules_context = ""
+    if rules:
+        rules_list = "\n".join([f"• Rule #{r['id']}: {r['text']}" for r in rules])
+        rules_context = (
+            f"\n[USER'S PERSONAL IRON RULES - MANDATORY ENFORCEMENT]\n"
+            f"The student has locked in these personal life rules for themselves:\n"
+            f"{rules_list}\n"
+            f"CRITICAL: You MUST actively enforce and hold the student strictly to these exact rules. "
+            f"Whenever they mention anything related to these rules or ask for advice, prioritize these rules!\n"
+        )
+
+    full_system_instruction = f"{SYSTEM_INSTRUCTION}\n\n{time_context}\n{rules_context}\n\n[Active Student Context]\n{pending_summary}"
 
     history = conversation_histories[user_id]
     await update.message.chat.send_action("typing")
@@ -594,6 +690,10 @@ def main():
     app.add_handler(CommandHandler("tasks", list_tasks_command))
     app.add_handler(CommandHandler("todo", list_tasks_command))
     app.add_handler(CommandHandler("done", done_task_command))
+    app.add_handler(CommandHandler("rule", add_rule_command))
+    app.add_handler(CommandHandler("rules", list_rules_command))
+    app.add_handler(CommandHandler("delrule", del_rule_command))
+    app.add_handler(CommandHandler("removerule", del_rule_command))
     app.add_handler(CommandHandler("clear", clear_command))
 
     # General Chat / Doubts
