@@ -6,8 +6,11 @@ import re
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List
+
+# Indian Standard Time (IST = UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
 
 from google import genai
 from google.genai import types
@@ -242,6 +245,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "I am your 24/7 Personal Mentor, GATE/SSC Planner, and Daily Coach.\n\n"
         "<b>⚡ Quick Commands:</b>\n"
+        "• <code>/now</code> or <code>/time</code> — Real-time date, time & active routine block\n"
         "• <code>/homework &lt;text&gt;</code> — Log college homework or assignment\n"
         "• <code>/tasks</code> or <code>/todo</code> — View your pending assignments\n"
         "• <code>/done &lt;id&gt;</code> — Mark an assignment completed\n"
@@ -253,6 +257,73 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Simply send any message! Ask about C programming, Engineering Math, GATE concepts, SSC GK, or check in with your daily progress."
     )
     await update.message.reply_text(welcome_text, parse_mode=ParseMode.HTML)
+
+def get_current_routine_block(time_val: float, day_name: str) -> tuple:
+    """Returns (current_block_name, next_block_name) based on Indian Standard Time."""
+    if day_name == "Saturday" and 18.5 <= time_val < 21.0:
+        return ("⚔️ SSC Shift: Reasoning Puzzles & English Vocab/Grammar", "21:00 PM: Dinner & Rest")
+    if day_name == "Sunday" and 7.5 <= time_val < 11.5:
+        return ("⚔️ SSC Shift: Speed Arithmetic & Static GK (Polity/History)", "11:30 AM: Free Block / Review")
+
+    if 22.5 <= time_val or time_val < 6.0:
+        return ("🛌 Deep Recovery Sleep (Non-negotiable 7.5 hrs)", "06:00 AM: Wake Up (3-sec rule) & 20-min Workout")
+    elif 6.0 <= time_val < 6.75:
+        return ("🌅 Morning Routine: Wake Up, 20-min Workout & Bath", "06:45 AM: Soaked Chana & Breakfast")
+    elif 6.75 <= time_val < 7.25:
+        return ("🥣 Nutrition: Soaked Chana + Peanuts + Breakfast", "07:15 AM: Deep Study Block 1 (GATE Core)")
+    elif 7.25 <= time_val < 9.25:
+        return ("🎯 Deep Study Block 1: GATE Core / Engineering Math", "09:15 AM: Cycle Commute to College (3.1 km)")
+    elif 9.25 <= time_val < 10.0:
+        return ("🚴 Active Commute: Cycle Ride to College (3.1 km)", "10:00 AM: College Lectures")
+    elif 10.0 <= time_val < 17.0:
+        return ("🏫 College Hours: Lectures & Lab (Finish assignments in breaks!)", "05:00 PM: Cycle Commute Back Home")
+    elif 17.0 <= time_val < 17.5:
+        return ("🚴 Active Commute: Cycle Ride Back Home (3.1 km)", "05:30 PM: Evening Rest & Tea")
+    elif 17.5 <= time_val < 18.25:
+        return ("☕ Reset Block: Evening Rest, Tea & Freshen Up", "06:15 PM: Deep Study Block 2")
+    elif 18.25 <= time_val < 20.5:
+        return ("🎯 Deep Study Block 2: C Programming & College Prep", "08:30 PM: Dinner & 15m Walk")
+    elif 20.5 <= time_val < 21.25:
+        return ("🍽️ Dinner & 15-min Outdoor Walk", "09:15 PM: Deep Study Block 3")
+    elif 21.25 <= time_val < 22.25:
+        return ("🎯 Deep Study Block 3: Revision & 30-min Aptitude", "10:15 PM: Pack Bag & Phone Quarantine")
+    else:
+        return ("🎒 Prep: Pack Bag for Tomorrow & Place Phone 6ft Away", "10:30 PM: Lights Out & Sleep")
+
+async def now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    now_ist = datetime.now(IST)
+    date_str = now_ist.strftime("%A, %d %B %Y")
+    time_str = now_ist.strftime("%I:%M:%S %p IST")
+    day_name = now_ist.strftime("%A")
+    time_val = now_ist.hour + now_ist.minute / 60.0
+
+    current_block, next_block = get_current_routine_block(time_val, day_name)
+
+    tasks = load_tasks()
+    pending = [t for t in tasks if t.get("status") == "pending"]
+    pending_count = len(pending)
+
+    is_sleep_time = 22.5 <= time_val or time_val < 6.0
+    mentor_note = (
+        "⚠️ <b>LATE NIGHT ALERT:</b> You should be asleep! Sleep is where discipline and muscle are built. Turn off screens!"
+        if is_sleep_time
+        else "⚡ <b>STAY LOCKED IN:</b> Stick to your current block and eliminate distractions."
+    )
+
+    now_text = (
+        "<b>🕒 REAL-TIME DISCIPLINE DASHBOARD</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>📅 Date:</b> {date_str}\n"
+        f"• <b>⏰ Time:</b> <code>{time_str}</code>\n"
+        f"• <b>🗓️ Day:</b> {day_name}\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• <b>📍 Current Block:</b>\n  <i>{current_block}</i>\n\n"
+        f"• <b>⚡ Next Milestone:</b>\n  <i>{next_block}</i>\n\n"
+        f"• <b>📋 Pending Tasks:</b> {pending_count} assignment(s) in queue\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{mentor_note}"
+    )
+    await update.message.reply_text(now_text, parse_mode=ParseMode.HTML)
 
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule_text = (
@@ -403,7 +474,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending = [f"#{t['id']}: {t['text']}" for t in tasks if t.get("status") == "pending"]
     pending_summary = ("Current pending college tasks:\n" + "\n".join(pending)) if pending else "No pending college tasks."
 
-    full_system_instruction = f"{SYSTEM_INSTRUCTION}\n\n[Active Student Context]\n{pending_summary}"
+    # Real-Time Indian Standard Time (IST) Context
+    now_ist = datetime.now(IST)
+    date_str = now_ist.strftime("%A, %d %B %Y")
+    time_str = now_ist.strftime("%I:%M %p IST")
+    day_name = now_ist.strftime("%A")
+    time_val = now_ist.hour + now_ist.minute / 60.0
+    current_block, next_block = get_current_routine_block(time_val, day_name)
+
+    time_context = (
+        f"[Current Real-Time World Context]\n"
+        f"• Exact Today's Date: {date_str}\n"
+        f"• Current Indian Time: {time_str}\n"
+        f"• Day of the Week: {day_name}\n"
+        f"• Active Routine Block: {current_block}\n"
+        f"• Next Milestone: {next_block}\n"
+        f"• Behavioral Rule: You always know the exact local time and date. "
+        f"If the student is texting during sleep hours (10:30 PM - 06:00 AM), address it firmly and push them to sleep."
+    )
+
+    full_system_instruction = f"{SYSTEM_INSTRUCTION}\n\n{time_context}\n\n[Active Student Context]\n{pending_summary}"
 
     history = conversation_histories[user_id]
     await update.message.chat.send_action("typing")
@@ -493,6 +583,10 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", start_command))
+    app.add_handler(CommandHandler("now", now_command))
+    app.add_handler(CommandHandler("time", now_command))
+    app.add_handler(CommandHandler("date", now_command))
+    app.add_handler(CommandHandler("status", now_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(CommandHandler("habits", habits_command))
     app.add_handler(CommandHandler("homework", add_homework_command))
